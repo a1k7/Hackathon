@@ -9,16 +9,16 @@ app.config['SECRET_KEY'] = 'secret-key-123'
 db = SQLAlchemy(app)
 scheduler = APScheduler()
 
-# --- Database Models ---
+
 
 class Record(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    category = db.Column(db.String(20)) # 'Vaccination' or 'Medicine'
+    category = db.Column(db.String(20)) 
     name = db.Column(db.String(100), nullable=False)
     scheduled_time = db.Column(db.DateTime, nullable=False)
-    status = db.Column(db.String(20), default='Pending') # Pending, Reminded, Completed
+    status = db.Column(db.String(20), default='Pending') 
 
-# --- HTML Template (Integrated) ---
+
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -92,7 +92,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- Routes ---
+
 
 @app.route('/')
 def index():
@@ -105,7 +105,7 @@ def add_record():
     name = request.form.get('name')
     time_str = request.form.get('time')
     
-    # Convert string to datetime object
+    
     scheduled_time = datetime.strptime(time_str, '%Y-%m-%dT%H:%M')
     
     new_record = Record(category=category, name=name, scheduled_time=scheduled_time)
@@ -113,12 +113,12 @@ def add_record():
     db.session.commit()
     return redirect(url_for('index'))
 
-# --- Reminder Logic (Background Task) ---
+
 
 def check_reminders():
     with app.app_context():
         now = datetime.now()
-        # Find pending records where time has passed
+       
         due_tasks = Record.query.filter(Record.scheduled_time <= now, Record.status == 'Pending').all()
         
         for task in due_tasks:
@@ -126,15 +126,13 @@ def check_reminders():
             task.status = 'Reminded'
             db.session.commit()
 
-# --- Initialization ---
-
 if __name__ == '__main__':
     with app.app_context():
-        db.create_all() # Create the database file
-    
-    # Start Scheduler to check every 10 seconds
+        db.create_all() 
+        
     scheduler.add_job(id='reminder_job', func=check_reminders, trigger='interval', seconds=10)
     scheduler.start()
     
     app.run(debug=True)
+
 
