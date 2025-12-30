@@ -1,34 +1,33 @@
 # ============================================================
-# SMARTLAB AI – ALL-IN-ONE STREAMLIT APP
-# 30+ TESTS + SYMPTOMS + EMAIL REMINDER
+# MEDIMIND AI – SMARTLAB + HEALTH REMINDER (EMAIL)
+# FINAL ALL-IN-ONE STREAMLIT APP
 # ============================================================
 
 import streamlit as st
 import pandas as pd
 import os, re
-from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
-from sqlalchemy.orm import declarative_base, sessionmaker
-import pdfplumber
+from datetime import datetime, timezone
+import pytz
 import smtplib
 from email.message import EmailMessage
+import pdfplumber
+
+from sqlalchemy import create_engine, Column, Integer, String, DateTime
+from sqlalchemy.orm import declarative_base, sessionmaker
+from streamlit_autorefresh import st_autorefresh
 
 # ------------------------------------------------------------
 # STREAMLIT CONFIG
 # ------------------------------------------------------------
-st.set_page_config(page_title="SmartLab AI", layout="centered")
+st.set_page_config(page_title="MediMind AI", layout="centered")
 
 # ------------------------------------------------------------
 # SESSION STATE
 # ------------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-
 if "users_db" not in st.session_state:
     st.session_state.users_db = {}
-
-if "user_email" not in st.session_state:
-    st.session_state.user_email = None
 
 # ------------------------------------------------------------
 # EMAIL FUNCTION
@@ -48,7 +47,7 @@ def send_email(to_email, subject, body):
         server.send_message(msg)
 
 # ------------------------------------------------------------
-# SQLITE – HEALTH REMINDER
+# DATABASE – REMINDERS
 # ------------------------------------------------------------
 engine = create_engine(
     "sqlite:///health_tracker.db",
@@ -62,8 +61,9 @@ class Record(Base):
     id = Column(Integer, primary_key=True)
     category = Column(String(20))
     name = Column(String(100))
-    scheduled_time = Column(DateTime)
+    scheduled_time = Column(DateTime)  # UTC
     status = Column(String(20), default="Pending")
+    email = Column(String(200))
 
 Base.metadata.create_all(engine)
 
@@ -119,19 +119,19 @@ def ensure_lab_database():
             40,40
         ],
         "Meaning": [
-            "Carries oxygen in blood","Red blood cells count","Packed RBC volume","RBC size",
-            "Hemoglobin per RBC","Hemoglobin concentration","RBC size variation",
-            "Total immune cells","Bacterial defense","Viral defense","Cleanup cells",
-            "Allergy response","Rare immune cells","Blood clotting",
-            "Kidney waste","Kidney filter","Protein waste","Bone & nerve health",
-            "Bone mineral","Gout indicator","Overall cholesterol","Blood fats",
+            "Carries oxygen","Red blood cells","Packed cell volume","RBC size","Hb per RBC",
+            "Hb concentration","RBC variation","Immune cells","Bacterial defense",
+            "Viral defense","Cleanup cells","Allergy response","Rare immune cells",
+            "Clotting cells","Kidney waste","Kidney filter","Protein waste",
+            "Bone health","Bone mineral","Gout marker",
+            "Cholesterol","Blood fats",
             "Jaundice marker","Processed bilirubin","Unprocessed bilirubin",
-            "Nutrition status","Liver protein","Immune protein","Protein balance",
+            "Nutrition","Liver protein","Immune protein","Protein balance",
             "Liver enzyme","Liver enzyme"
         ],
         "Low Symptoms": [
             "Fatigue, dizziness","Weakness","Anemia","Vitamin deficiency","Weakness",
-            "Poor oxygen delivery","Anemia","Frequent infections","Low immunity","Weak immunity",
+            "Low oxygen","Anemia","Frequent infections","Low immunity","Weak immunity",
             "Poor cleanup","Low allergy response","Rare","Bleeding risk",
             "Kidney failure","Muscle loss","Malnutrition","Bone weakness",
             "Bone issues","Rare","Usually normal","Usually normal",
@@ -198,9 +198,9 @@ def scan_pdf(path):
 
     for test, aliases in TEST_SYNONYMS.items():
         for a in aliases:
-            match = re.search(a + r".{0,40}?(\d+\.?\d*)", text)
-            if match:
-                found[test] = float(match.group(1))
+            m = re.search(a + r".{0,40}?(\d+\.?\d*)", text)
+            if m:
+                found[test] = float(m.group(1))
                 break
     return found
 
@@ -223,24 +223,21 @@ class MedicalInterpreter:
 # LOGIN
 # ------------------------------------------------------------
 if not st.session_state.logged_in:
-    st.title("🧠 SmartLab AI")
+    st.title("🧠 MediMind AI")
 
     t1, t2 = st.tabs(["Register","Login"])
     with t1:
         u = st.text_input("Username")
-        e = st.text_input("Email")
         p = st.text_input("Password", type="password")
         if st.button("Register"):
-            st.session_state.users_db[u] = {"password": p, "email": e}
+            st.session_state.users_db[u] = p
             st.success("Registered")
     with t2:
         u = st.text_input("Username", key="l1")
         p = st.text_input("Password", type="password", key="l2")
         if st.button("Login"):
-            user = st.session_state.users_db.get(u)
-            if user and user["password"] == p:
+            if st.session_state.users_db.get(u) == p:
                 st.session_state.logged_in = True
-                st.session_state.user_email = user["email"]
                 st.rerun()
             else:
                 st.error("Invalid login")
@@ -255,7 +252,7 @@ page = st.sidebar.radio("Navigate",["SmartLab AI","Health Reminder","Logout"])
 # SMARTLAB AI PAGE
 # ------------------------------------------------------------
 if page == "SmartLab AI":
-    st.title("🧪 SmartLab AI – Complete Lab Analysis")
+    st.title("🧪 SmartLab AI – Lab Analysis")
 
     pdf = st.file_uploader("Upload Lab Report (PDF)", type=["pdf"])
     if pdf:
@@ -266,7 +263,7 @@ if page == "SmartLab AI":
         interpreter = MedicalInterpreter()
 
         if not extracted:
-            st.error("No test values detected.")
+            st.error("No lab values detected.")
         else:
             for test, val in extracted.items():
                 row, status, symptom = interpreter.analyze(test, val)
@@ -278,29 +275,40 @@ if page == "SmartLab AI":
                 st.divider()
 
 # ------------------------------------------------------------
-# HEALTH REMINDER (EMAIL)
+# HEALTH REMINDER PAGE (EMAIL)
 # ------------------------------------------------------------
 elif page == "Health Reminder":
     st.title("⏰ Health Reminder")
+
+    st_autorefresh(interval=30 * 1000, key="refresh")
+
     db = get_db()
 
     with st.form("add"):
         name = st.text_input("Medicine / Vaccine")
         category = st.selectbox("Type",["Medicine","Vaccination"])
-        time = st.datetime_input("Time")
+        email = st.text_input("Email")
+        local_time = st.datetime_input("Reminder Time")
         if st.form_submit_button("Add"):
-            db.add(Record(name=name,category=category,scheduled_time=time))
+            ist = pytz.timezone("Asia/Kolkata")
+            utc = ist.localize(local_time).astimezone(timezone.utc)
+            db.add(Record(
+                name=name,
+                category=category,
+                scheduled_time=utc,
+                email=email
+            ))
             db.commit()
-            st.success("Added")
+            st.success("Reminder added")
 
-    now = datetime.now()
+    now = datetime.utcnow().replace(tzinfo=timezone.utc)
     for r in db.query(Record).filter(
         Record.status=="Pending",
         Record.scheduled_time<=now
     ):
         send_email(
-            st.session_state.user_email,
-            "⏰ Health Reminder – SmartLab AI",
+            r.email,
+            "⏰ Health Reminder – MediMind AI",
             f"Reminder: {r.name}"
         )
         r.status="Reminded"
@@ -316,5 +324,4 @@ elif page == "Health Reminder":
 # ------------------------------------------------------------
 else:
     st.session_state.logged_in = False
-    st.session_state.user_email = None
     st.rerun()
