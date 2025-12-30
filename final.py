@@ -338,7 +338,11 @@ elif page == "Health Reminder":
         db.commit()
 
     for r in db.query(Record).all():
-        st.write(f"{r.name} | {r.scheduled_time} | {r.status}")
+        ist = pytz.timezone("Asia/Kolkata")
+        display_time = r.scheduled_time.astimezone(ist).strftime("%Y-%m-%d %H:%M")
+
+        st.write(f"{r.name} | {display_time} | {r.status}")
+
 
     db.close()
 
