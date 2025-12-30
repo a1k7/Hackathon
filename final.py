@@ -1,15 +1,15 @@
 # ============================================================
-# SMARTLAB AI – STREAMLIT APP (WITH DUE REMINDER ALERT + SOUND)
+# SMARTLAB AI – STREAMLIT APP
+# HEALTH REMINDER WITH AUTO-REFRESH + SOUND ALERT
 # ============================================================
 
 import streamlit as st
 import pandas as pd
-import os
-import re
 import base64
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
+from streamlit_autorefresh import st_autorefresh
 
 # ------------------------------------------------------------
 # STREAMLIT CONFIG
@@ -26,7 +26,7 @@ if "users_db" not in st.session_state:
     st.session_state.users_db = {}
 
 # ------------------------------------------------------------
-# SQLITE – HEALTH REMINDER DB
+# DATABASE (SQLITE)
 # ------------------------------------------------------------
 engine = create_engine(
     "sqlite:///health_tracker.db",
@@ -49,7 +49,7 @@ def get_db():
     return SessionLocal()
 
 # ------------------------------------------------------------
-# SOUND ALERT (BEEP)
+# SOUND ALERT (BROWSER-BASED)
 # ------------------------------------------------------------
 def play_alert_sound():
     beep = """
@@ -62,10 +62,11 @@ def play_alert_sound():
     st.markdown(beep, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# CHECK & NOTIFY DUE REMINDERS
+# REMINDER CHECK + NOTIFICATION
 # ------------------------------------------------------------
 def check_and_notify(db):
     now = datetime.now()
+
     due_tasks = db.query(Record).filter(
         Record.scheduled_time <= now,
         Record.status == "Pending"
@@ -93,8 +94,8 @@ if not st.session_state.logged_in:
             st.success("Registered successfully")
 
     with t2:
-        u = st.text_input("Username", key="l1")
-        p = st.text_input("Password", type="password", key="l2")
+        u = st.text_input("Username", key="login_u")
+        p = st.text_input("Password", type="password", key="login_p")
         if st.button("Login"):
             if st.session_state.users_db.get(u) == p:
                 st.session_state.logged_in = True
@@ -113,10 +114,13 @@ page = st.sidebar.radio(
 )
 
 # ------------------------------------------------------------
-# HEALTH REMINDER PAGE (WITH ALERT)
+# HEALTH REMINDER PAGE (AUTO-REFRESH ENABLED)
 # ------------------------------------------------------------
 if page == "Health Reminder":
     st.title("⏰ Health & Vaccination Reminder")
+
+    # 🔁 AUTO-REFRESH EVERY 30 SECONDS
+    st_autorefresh(interval=30 * 1000, key="reminder_refresh")
 
     db = get_db()
 
@@ -133,7 +137,7 @@ if page == "Health Reminder":
             db.commit()
             st.success("Reminder added")
 
-    # 🔔 CHECK DUE REMINDERS (AUTO)
+    # 🔔 CHECK & NOTIFY (RUNS EVERY AUTO-REFRESH)
     check_and_notify(db)
 
     st.subheader("Scheduled Reminders")
@@ -149,11 +153,11 @@ if page == "Health Reminder":
     db.close()
 
 # ------------------------------------------------------------
-# SMARTLAB AI PAGE (PLACEHOLDER – OPTIONAL)
+# SMARTLAB AI PAGE (PLACEHOLDER)
 # ------------------------------------------------------------
 elif page == "SmartLab AI":
     st.title("🧪 SmartLab AI")
-    st.info("Lab report analysis module is active in your main build.")
+    st.info("Lab analysis module integrated separately.")
 
 # ------------------------------------------------------------
 # LOGOUT
