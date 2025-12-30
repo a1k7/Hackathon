@@ -1,5 +1,6 @@
 # ============================================================
-# MEDIMIND AI – SMARTLAB + HEALTH REMINDER (EMAIL)
+# MEDIMIND AI
+# SMARTLAB AI + HEALTH REMINDER WITH EMAIL ALERT
 # FINAL ALL-IN-ONE STREAMLIT APP
 # ============================================================
 
@@ -28,6 +29,8 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "users_db" not in st.session_state:
     st.session_state.users_db = {}
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
 
 # ------------------------------------------------------------
 # EMAIL FUNCTION
@@ -71,7 +74,7 @@ def get_db():
     return SessionLocal()
 
 # ------------------------------------------------------------
-# SMARTLAB MEDICAL DATABASE (30+ TESTS + SYMPTOMS)
+# SMARTLAB DATABASE (30+ TESTS + SYMPTOMS)
 # ------------------------------------------------------------
 def ensure_lab_database():
     if os.path.exists("lab_data.csv"):
@@ -220,50 +223,69 @@ class MedicalInterpreter:
         return row, "NORMAL", "Within healthy range"
 
 # ------------------------------------------------------------
-# LOGIN
+# LOGIN / REGISTER
 # ------------------------------------------------------------
 if not st.session_state.logged_in:
     st.title("🧠 MediMind AI")
 
-    t1, t2 = st.tabs(["Register","Login"])
-    with t1:
-        u = st.text_input("Username")
-        p = st.text_input("Password", type="password")
+    tab1, tab2 = st.tabs(["Register", "Login"])
+
+    with tab1:
+        username = st.text_input("Username")
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+
         if st.button("Register"):
-            st.session_state.users_db[u] = p
-            st.success("Registered")
-    with t2:
-        u = st.text_input("Username", key="l1")
-        p = st.text_input("Password", type="password", key="l2")
+            if username in st.session_state.users_db:
+                st.error("User already exists")
+            elif not email:
+                st.error("Email required")
+            else:
+                st.session_state.users_db[username] = {
+                    "password": password,
+                    "email": email
+                }
+                st.success("Registered successfully. Please login.")
+
+    with tab2:
+        username = st.text_input("Username", key="login_user")
+        password = st.text_input("Password", type="password", key="login_pass")
+
         if st.button("Login"):
-            if st.session_state.users_db.get(u) == p:
+            user = st.session_state.users_db.get(username)
+            if user and user["password"] == password:
                 st.session_state.logged_in = True
+                st.session_state.current_user = {
+                    "username": username,
+                    "email": user["email"]
+                }
                 st.rerun()
             else:
-                st.error("Invalid login")
+                st.error("Invalid credentials")
+
     st.stop()
 
 # ------------------------------------------------------------
 # SIDEBAR
 # ------------------------------------------------------------
-page = st.sidebar.radio("Navigate",["SmartLab AI","Health Reminder","Logout"])
+page = st.sidebar.radio("Navigate", ["SmartLab AI", "Health Reminder", "Logout"])
 
 # ------------------------------------------------------------
-# SMARTLAB AI PAGE
+# SMARTLAB AI
 # ------------------------------------------------------------
 if page == "SmartLab AI":
-    st.title("🧪 SmartLab AI – Lab Analysis")
+    st.title("🧪 SmartLab AI – Lab Report Analysis")
 
     pdf = st.file_uploader("Upload Lab Report (PDF)", type=["pdf"])
     if pdf:
-        with open("temp.pdf","wb") as f:
+        with open("temp.pdf", "wb") as f:
             f.write(pdf.read())
 
         extracted = scan_pdf("temp.pdf")
         interpreter = MedicalInterpreter()
 
         if not extracted:
-            st.error("No lab values detected.")
+            st.error("No lab values detected")
         else:
             for test, val in extracted.items():
                 row, status, symptom = interpreter.analyze(test, val)
@@ -275,7 +297,7 @@ if page == "SmartLab AI":
                 st.divider()
 
 # ------------------------------------------------------------
-# HEALTH REMINDER PAGE (EMAIL)
+# HEALTH REMINDER (EMAIL)
 # ------------------------------------------------------------
 elif page == "Health Reminder":
     st.title("⏰ Health Reminder")
@@ -283,35 +305,36 @@ elif page == "Health Reminder":
     st_autorefresh(interval=30 * 1000, key="refresh")
 
     db = get_db()
+    user_email = st.session_state.current_user["email"]
 
     with st.form("add"):
         name = st.text_input("Medicine / Vaccine")
-        category = st.selectbox("Type",["Medicine","Vaccination"])
-        email = st.text_input("Email")
+        category = st.selectbox("Type", ["Medicine", "Vaccination"])
         local_time = st.datetime_input("Reminder Time")
         if st.form_submit_button("Add"):
             ist = pytz.timezone("Asia/Kolkata")
             utc = ist.localize(local_time).astimezone(timezone.utc)
+
             db.add(Record(
                 name=name,
                 category=category,
                 scheduled_time=utc,
-                email=email
+                email=user_email
             ))
             db.commit()
             st.success("Reminder added")
 
     now = datetime.utcnow().replace(tzinfo=timezone.utc)
     for r in db.query(Record).filter(
-        Record.status=="Pending",
-        Record.scheduled_time<=now
+        Record.status == "Pending",
+        Record.scheduled_time <= now
     ):
         send_email(
             r.email,
             "⏰ Health Reminder – MediMind AI",
             f"Reminder: {r.name}"
         )
-        r.status="Reminded"
+        r.status = "Reminded"
         db.commit()
 
     for r in db.query(Record).all():
@@ -324,4 +347,5 @@ elif page == "Health Reminder":
 # ------------------------------------------------------------
 else:
     st.session_state.logged_in = False
+    st.session_state.current_user = None
     st.rerun()
