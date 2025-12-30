@@ -1,12 +1,14 @@
 # ============================================================
-# SMARTLAB AI – STREAMLIT APP
-# HEALTH REMINDER WITH AUTO-REFRESH + SOUND ALERT
+# MEDI-MIND AI (formerly SmartLab AI)
+# HEALTH & VACCINATION REMINDER
+# FINAL STABLE VERSION
 # ============================================================
 
 import streamlit as st
 import pandas as pd
-import base64
-from datetime import datetime
+from datetime import datetime, timezone
+import pytz
+
 from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 from streamlit_autorefresh import st_autorefresh
@@ -14,7 +16,7 @@ from streamlit_autorefresh import st_autorefresh
 # ------------------------------------------------------------
 # STREAMLIT CONFIG
 # ------------------------------------------------------------
-st.set_page_config(page_title="SmartLab AI", layout="centered")
+st.set_page_config(page_title="MediMind AI", layout="centered")
 
 # ------------------------------------------------------------
 # SESSION STATE
@@ -40,7 +42,7 @@ class Record(Base):
     id = Column(Integer, primary_key=True)
     category = Column(String(20))
     name = Column(String(100))
-    scheduled_time = Column(DateTime)
+    scheduled_time = Column(DateTime)  # STORED IN UTC
     status = Column(String(20), default="Pending")
 
 Base.metadata.create_all(engine)
@@ -49,32 +51,25 @@ def get_db():
     return SessionLocal()
 
 # ------------------------------------------------------------
-# SOUND ALERT (BROWSER-BASED)
-# ------------------------------------------------------------
-def play_alert_sound():
-    beep = """
-    <audio autoplay>
-    <source src="data:audio/wav;base64,
-    UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA="
-    type="audio/wav">
-    </audio>
-    """
-    st.markdown(beep, unsafe_allow_html=True)
-
-# ------------------------------------------------------------
-# REMINDER CHECK + NOTIFICATION
+# REMINDER CHECK + NOTIFICATION (UTC SAFE)
 # ------------------------------------------------------------
 def check_and_notify(db):
-    now = datetime.now()
+    now_utc = datetime.now(timezone.utc)
 
     due_tasks = db.query(Record).filter(
-        Record.scheduled_time <= now,
+        Record.scheduled_time <= now_utc,
         Record.status == "Pending"
     ).all()
 
     for task in due_tasks:
         st.error(f"⏰ REMINDER DUE: {task.category} – {task.name}")
-        play_alert_sound()
+
+        # 🔊 SAFE AUDIO (WORKS ON SAFARI + STREAMLIT CLOUD)
+        st.audio(
+            "https://www.soundjay.com/buttons/sounds/beep-07.mp3",
+            autoplay=True
+        )
+
         task.status = "Reminded"
         db.commit()
 
@@ -82,22 +77,22 @@ def check_and_notify(db):
 # LOGIN PAGE
 # ------------------------------------------------------------
 if not st.session_state.logged_in:
-    st.title("SmartLab AI")
+    st.title("🧠 MediMind AI")
 
     t1, t2 = st.tabs(["Register", "Login"])
 
     with t1:
-        u = st.text_input("Username")
-        p = st.text_input("Password", type="password")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
         if st.button("Register"):
-            st.session_state.users_db[u] = p
+            st.session_state.users_db[username] = password
             st.success("Registered successfully")
 
     with t2:
-        u = st.text_input("Username", key="login_u")
-        p = st.text_input("Password", type="password", key="login_p")
+        username = st.text_input("Username", key="login_user")
+        password = st.text_input("Password", type="password", key="login_pass")
         if st.button("Login"):
-            if st.session_state.users_db.get(u) == p:
+            if st.session_state.users_db.get(username) == password:
                 st.session_state.logged_in = True
                 st.rerun()
             else:
@@ -127,12 +122,19 @@ if page == "Health Reminder":
     with st.form("add_reminder"):
         name = st.text_input("Medicine / Vaccine Name")
         category = st.selectbox("Type", ["Medicine", "Vaccination"])
-        time = st.datetime_input("Reminder Time")
-        if st.form_submit_button("Add Reminder"):
+        local_time = st.datetime_input("Reminder Time (Your Local Time)")
+        submitted = st.form_submit_button("Add Reminder")
+
+        if submitted:
+            # 🌍 CONVERT IST → UTC (CRITICAL FIX)
+            local_tz = pytz.timezone("Asia/Kolkata")
+            local_dt = local_tz.localize(local_time)
+            utc_dt = local_dt.astimezone(timezone.utc)
+
             db.add(Record(
                 name=name,
                 category=category,
-                scheduled_time=time
+                scheduled_time=utc_dt
             ))
             db.commit()
             st.success("Reminder added")
@@ -146,7 +148,9 @@ if page == "Health Reminder":
     st.table([{
         "Type": r.category,
         "Name": r.name,
-        "Time": r.scheduled_time.strftime("%Y-%m-%d %H:%M"),
+        "Time (IST)": r.scheduled_time.astimezone(
+            pytz.timezone("Asia/Kolkata")
+        ).strftime("%Y-%m-%d %H:%M"),
         "Status": r.status
     } for r in records])
 
@@ -157,7 +161,7 @@ if page == "Health Reminder":
 # ------------------------------------------------------------
 elif page == "SmartLab AI":
     st.title("🧪 SmartLab AI")
-    st.info("Lab analysis module integrated separately.")
+    st.info("Lab report analysis module integrated separately.")
 
 # ------------------------------------------------------------
 # LOGOUT
