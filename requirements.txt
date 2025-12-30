@@ -1,6 +1,5 @@
 streamlit
-pandas
 sqlalchemy
-pdfplumber
-
+pandas
 streamlit-autorefresh
+pytz
