@@ -1,13 +1,14 @@
 # ============================================================
-# MEDI-MIND AI (formerly SmartLab AI)
-# HEALTH & VACCINATION REMINDER
-# FINAL STABLE VERSION
+# MEDI-MIND AI
+# HEALTH & VACCINATION REMINDER (EMAIL AT LOGIN ONLY)
+# FINAL VERSION
 # ============================================================
 
 import streamlit as st
-import pandas as pd
 from datetime import datetime, timezone
 import pytz
+import smtplib
+from email.message import EmailMessage
 
 from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -24,8 +25,11 @@ st.set_page_config(page_title="MediMind AI", layout="centered")
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
+if "user_email" not in st.session_state:
+    st.session_state.user_email = None
+
 if "users_db" not in st.session_state:
-    st.session_state.users_db = {}
+    st.session_state.users_db = {}  # username -> {password, email}
 
 # ------------------------------------------------------------
 # DATABASE (SQLITE)
@@ -42,8 +46,9 @@ class Record(Base):
     id = Column(Integer, primary_key=True)
     category = Column(String(20))
     name = Column(String(100))
-    scheduled_time = Column(DateTime)  # STORED IN UTC
+    scheduled_time = Column(DateTime)  # UTC
     status = Column(String(20), default="Pending")
+    email = Column(String(200))
 
 Base.metadata.create_all(engine)
 
@@ -51,7 +56,24 @@ def get_db():
     return SessionLocal()
 
 # ------------------------------------------------------------
-# REMINDER CHECK + NOTIFICATION (UTC SAFE)
+# EMAIL FUNCTION
+# ------------------------------------------------------------
+def send_email_reminder(to_email, subject, body):
+    msg = EmailMessage()
+    msg["From"] = st.secrets["EMAIL_ADDRESS"]
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(
+            st.secrets["EMAIL_ADDRESS"],
+            st.secrets["EMAIL_APP_PASSWORD"]
+        )
+        server.send_message(msg)
+
+# ------------------------------------------------------------
+# CHECK & SEND EMAIL REMINDERS
 # ------------------------------------------------------------
 def check_and_notify(db):
     now_utc = datetime.now(timezone.utc)
@@ -62,19 +84,32 @@ def check_and_notify(db):
     ).all()
 
     for task in due_tasks:
-        st.error(f"⏰ REMINDER DUE: {task.category} – {task.name}")
+        try:
+            send_email_reminder(
+                task.email,
+                "⏰ Health Reminder – MediMind AI",
+                f"""
+Hello,
 
-        # 🔊 SAFE AUDIO (WORKS ON SAFARI + STREAMLIT CLOUD)
-        st.audio(
-            "https://www.soundjay.com/buttons/sounds/beep-07.mp3",
-            autoplay=True
-        )
+This is your health reminder.
 
-        task.status = "Reminded"
-        db.commit()
+Type: {task.category}
+Name: {task.name}
+Time: NOW
+
+Please take the required action.
+
+– MediMind AI
+"""
+            )
+            task.status = "Reminded"
+            db.commit()
+            st.success(f"Email sent for: {task.name}")
+        except Exception as e:
+            st.error(f"Email failed: {e}")
 
 # ------------------------------------------------------------
-# LOGIN PAGE
+# LOGIN / REGISTER PAGE
 # ------------------------------------------------------------
 if not st.session_state.logged_in:
     st.title("🧠 MediMind AI")
@@ -83,17 +118,28 @@ if not st.session_state.logged_in:
 
     with t1:
         username = st.text_input("Username")
+        email = st.text_input("Email")
         password = st.text_input("Password", type="password")
+
         if st.button("Register"):
-            st.session_state.users_db[username] = password
-            st.success("Registered successfully")
+            if username in st.session_state.users_db:
+                st.error("User already exists")
+            else:
+                st.session_state.users_db[username] = {
+                    "password": password,
+                    "email": email
+                }
+                st.success("Registered successfully")
 
     with t2:
         username = st.text_input("Username", key="login_user")
         password = st.text_input("Password", type="password", key="login_pass")
+
         if st.button("Login"):
-            if st.session_state.users_db.get(username) == password:
+            user = st.session_state.users_db.get(username)
+            if user and user["password"] == password:
                 st.session_state.logged_in = True
+                st.session_state.user_email = user["email"]
                 st.rerun()
             else:
                 st.error("Invalid credentials")
@@ -101,7 +147,7 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ------------------------------------------------------------
-# SIDEBAR NAVIGATION
+# SIDEBAR
 # ------------------------------------------------------------
 page = st.sidebar.radio(
     "Navigate",
@@ -109,12 +155,11 @@ page = st.sidebar.radio(
 )
 
 # ------------------------------------------------------------
-# HEALTH REMINDER PAGE (AUTO-REFRESH ENABLED)
+# HEALTH REMINDER PAGE
 # ------------------------------------------------------------
 if page == "Health Reminder":
     st.title("⏰ Health & Vaccination Reminder")
 
-    # 🔁 AUTO-REFRESH EVERY 30 SECONDS
     st_autorefresh(interval=30 * 1000, key="reminder_refresh")
 
     db = get_db()
@@ -126,7 +171,6 @@ if page == "Health Reminder":
         submitted = st.form_submit_button("Add Reminder")
 
         if submitted:
-            # 🌍 CONVERT IST → UTC (CRITICAL FIX)
             local_tz = pytz.timezone("Asia/Kolkata")
             local_dt = local_tz.localize(local_time)
             utc_dt = local_dt.astimezone(timezone.utc)
@@ -134,12 +178,13 @@ if page == "Health Reminder":
             db.add(Record(
                 name=name,
                 category=category,
-                scheduled_time=utc_dt
+                scheduled_time=utc_dt,
+                email=st.session_state.user_email
             ))
             db.commit()
             st.success("Reminder added")
 
-    # 🔔 CHECK & NOTIFY (RUNS EVERY AUTO-REFRESH)
+    # 🔔 CHECK & SEND EMAIL
     check_and_notify(db)
 
     st.subheader("Scheduled Reminders")
@@ -148,6 +193,7 @@ if page == "Health Reminder":
     st.table([{
         "Type": r.category,
         "Name": r.name,
+        "Email": r.email,
         "Time (IST)": r.scheduled_time.astimezone(
             pytz.timezone("Asia/Kolkata")
         ).strftime("%Y-%m-%d %H:%M"),
@@ -157,15 +203,16 @@ if page == "Health Reminder":
     db.close()
 
 # ------------------------------------------------------------
-# SMARTLAB AI PAGE (PLACEHOLDER)
+# SMARTLAB AI PAGE
 # ------------------------------------------------------------
 elif page == "SmartLab AI":
     st.title("🧪 SmartLab AI")
-    st.info("Lab report analysis module integrated separately.")
+    st.info("Lab analysis module integrated separately.")
 
 # ------------------------------------------------------------
 # LOGOUT
 # ------------------------------------------------------------
 elif page == "Logout":
     st.session_state.logged_in = False
+    st.session_state.user_email = None
     st.rerun()
